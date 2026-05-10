@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourcePerFileMappings">
+    <file url="file://$PROJECT_DIR$/backend/internal/db/myFile.sql" value="83820c84-a200-4a04-891d-ceedaef5c7b8" />
+    <file url="file://$PROJECT_DIR$/backend/internal/db/mySession.sql" value="83820c84-a200-4a04-891d-ceedaef5c7b8" />
+  </component>
+</project>
