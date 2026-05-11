@@ -85,7 +85,6 @@ class MultiAgentSystem:
         workflow.set_entry_point("orchestrator")
         
         # 添加条件边（由 Orchestrator 决定下一个 Agent）
-        # LangGraph 新版本使用 path 参数，不需要 mapping
         workflow.add_conditional_edges(
             "orchestrator",
             self._route_to_agent,

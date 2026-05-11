@@ -16,29 +16,17 @@ import (
 func GetSessions(c *gin.Context) {
 	userId, exists := c.Get("userId")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, models.Response{
-			Code:    http.StatusUnauthorized,
-			Message: "未授权",
-			Data:    nil,
-		})
+		c.JSON(http.StatusUnauthorized, utils.GetResponse(http.StatusUnauthorized, "未授权", nil))
 		return
 	}
 
 	session := &models.Session{UserID: userId.(uint)}
 	sessions, err := service.GetUserSessions(session)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.Response{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-			Data:    nil,
-		})
+		c.JSON(http.StatusBadRequest, utils.GetResponse(http.StatusBadRequest, err.Error(), nil))
 		return
 	}
-	c.JSON(http.StatusOK, models.Response{
-		Code:    http.StatusOK,
-		Message: utils.MSGSuccess,
-		Data:    sessions,
-	})
+	c.JSON(http.StatusOK, utils.GetResponse(http.StatusOK, utils.MSGSuccess, sessions))
 }
 
 // CreateSession 创建会话
@@ -47,21 +35,13 @@ func CreateSession(c *gin.Context) {
 		Title string `json:"title"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.Response{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-			Data:    nil,
-		})
+		c.JSON(http.StatusBadRequest, utils.GetResponse(http.StatusBadRequest, err.Error(), nil))
 		return
 	}
 
 	userId, exists := c.Get("userId")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, models.Response{
-			Code:    http.StatusUnauthorized,
-			Message: "未授权",
-			Data:    nil,
-		})
+		c.JSON(http.StatusUnauthorized, utils.GetResponse(http.StatusUnauthorized, "未授权", nil))
 		return
 	}
 
@@ -71,18 +51,10 @@ func CreateSession(c *gin.Context) {
 	}
 
 	if err := service.CreateSession(session); err != nil {
-		c.JSON(http.StatusBadRequest, models.Response{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-			Data:    nil,
-		})
+		c.JSON(http.StatusBadRequest, utils.GetResponse(http.StatusBadRequest, err.Error(), nil))
 		return
 	}
-	c.JSON(http.StatusOK, models.Response{
-		Code:    http.StatusOK,
-		Message: utils.MSGSuccess,
-		Data:    session,
-	})
+	c.JSON(http.StatusOK, utils.GetResponse(http.StatusOK, utils.MSGSuccess, session))
 }
 
 // DeleteSession 删除会话
@@ -90,27 +62,15 @@ func DeleteSession(c *gin.Context) {
 	id := c.Param("sessionId")
 	sessionId, err := strconv.ParseUint(id, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.Response{
-			Code:    http.StatusBadRequest,
-			Message: "无效的会话 ID",
-			Data:    nil,
-		})
+		c.JSON(http.StatusBadRequest, utils.GetResponse(http.StatusBadRequest, "无效的会话 ID", nil))
 		return
 	}
 
 	if err := service.DeleteSession(uint(sessionId)); err != nil {
-		c.JSON(http.StatusBadRequest, models.Response{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-			Data:    nil,
-		})
+		c.JSON(http.StatusBadRequest, utils.GetResponse(http.StatusBadRequest, err.Error(), nil))
 		return
 	}
-	c.JSON(http.StatusOK, models.Response{
-		Code:    http.StatusOK,
-		Message: utils.MSGSuccess,
-		Data:    nil,
-	})
+	c.JSON(http.StatusOK, utils.GetResponse(http.StatusOK, utils.MSGSuccess, nil))
 }
 
 // GetMessages 获取关于会话的所有消息
@@ -118,28 +78,16 @@ func GetMessages(c *gin.Context) {
 	id := c.Param("sessionId")
 	sessionId, err := strconv.ParseUint(id, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.Response{
-			Code:    http.StatusBadRequest,
-			Message: "无效的会话 ID",
-			Data:    nil,
-		})
+		c.JSON(http.StatusBadRequest, utils.GetResponse(http.StatusBadRequest, "无效的会话 ID", nil))
 		return
 	}
 
 	messages, err := service.GetMessagesBySessionId(uint(sessionId))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.Response{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-			Data:    nil,
-		})
+		c.JSON(http.StatusBadRequest, utils.GetResponse(http.StatusBadRequest, err.Error(), nil))
 		return
 	}
-	c.JSON(http.StatusOK, models.Response{
-		Code:    http.StatusOK,
-		Message: utils.MSGSuccess,
-		Data:    messages,
-	})
+	c.JSON(http.StatusOK, utils.GetResponse(http.StatusOK, utils.MSGSuccess, messages))
 }
 
 // SendMessage 发送消息

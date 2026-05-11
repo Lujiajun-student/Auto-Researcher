@@ -200,6 +200,7 @@ curl -X POST http://localhost:8000/api/v1/task/execute \
 **GET** `/api/v1/status`
 
 **响应**：
+
 ```json
 {
   "status": "running",
@@ -217,6 +218,7 @@ curl -X POST http://localhost:8000/api/v1/task/execute \
 **GET** `/api/v1/health`
 
 **响应**：
+
 ```json
 {
   "status": "healthy"
@@ -359,3 +361,198 @@ Code Agent 使用 Docker 沙箱执行代码，需要确保：
 ## 许可证
 
 MIT License
+
+# 简单介绍结构
+
+首先是需要接收输入。在`app.py`中。
+
+```python
+@app.post("/api/v1/task/execute", response_model=TaskResponse)
+async def execute_task(request: TaskRequest):
+    """
+    执行任务
+    
+    Args:
+        request: 任务请求
+        
+    Returns:
+        任务执行结果
+    """
+    # 生成任务 ID（如果没有提供）
+    task_id = request.task_id or str(uuid.uuid4())
+    
+    try:
+        # 异步执行任务
+        result = await agent_system.execute_task(
+            task_id=task_id,
+            task_description=request.description
+        )
+        
+        print(f"\n[API] 返回结果:")
+        print(f"  - task_id: {task_id}")
+        print(f"  - status: {result.get('status')}")
+        print(f"  - files 数量：{len(result.get('files', []))}")
+        
+        return TaskResponse(
+            task_id=task_id,
+            status=result.get("status", "completed"),
+            results=result.get("results"),
+            error=result.get("error"),
+            files=result.get("files", [])  # 新增：包含文件列表
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"任务执行失败：{str(e)}"
+        )
+```
+
+接收的输入如下。
+
+```json
+POST /api/v1/task/execute
+{
+  "description": "研究大模型机器遗忘的最新方法，找到相关论文，解析核心算法，并实现示例代码"
+}
+```
+
+这里需要多agent，下面是多agent的初始化。
+
+![image-20260511123206482](assets/image-20260511123206482.png)
+
+## 初始化Agent
+
+首先对三个agent进行了初始化。
+
+三个agent初始化的方法类似，以OrchestratorAgent为例。
+
+![image-20260511123319930](assets/image-20260511123319930.png)
+
+首先是init函数，这里构建了提示词，并通过ChatOpenAI来配置了使用的大模型。
+
+![image-20260511123437990](assets/image-20260511123437990.png)
+
+由于提示词固定了大模型只会返回json数据，因此这里response得到的就是json。将这个json解析后，能够获取多个sub_tasks，表示按顺序为三个agent派发的三个子任务。
+
+其他的也是类似，上面得到sub_tasks后，会根据task的type来调用各agent的方法。比如search agent调用search方法。
+
+![image-20260511123829059](assets/image-20260511123829059.png)
+
+之类根据提示词和sub_task的description来让大模型返回结构化的结果。
+
+这样下来，最后所有agents都会返回结构化的数据，返回到Orchestrator agent。这个agent再返回最终的总结结果，就会显示到前端页面上。而这些阿根廷产生的结果，如返回的content数据，都会作为结构化文件返回到前端供下载或者阅读。
+
+## 工作流
+
+这里使用的是编排者-执行者(Orchestrator-Workers)的工作流。
+
+![image-20260511133844358](assets/image-20260511133844358.png)
+
+这里创建了有向图workflow，规定了接下来的执行步骤。而且通过StateGraph添加了系统状态，系统状态定义了当前的任务、子任务状态、返回值、生成的数据文件等。
+
+![image-20260511134950097](assets/image-20260511134950097.png)
+
+这里的信息为整个工作流的所有agent可见、可修改，根据agent的返回值来自动修改状态。
+
+然后，这里添加了四个节点，分别代表四个agent。将orchestrator作为初始节点，然后添加条件边，从orchestrator指向下一个节点。`_route_to_agent`会给出指向下一个agent的标签，只要有指向，就会循环调用，直到碰到None，工作流就会结束。
+
+![image-20260511135601079](assets/image-20260511135601079.png)
+
+然后，各个Agent完成后，工作流会回到orchestrator。
+
+![image-20260511135830387](assets/image-20260511135830387.png)
+
+回到orchestrator，再决定接下来调用什么agent，或者结束工作流。
+
+```text
+初始化阶段：
+┌─────────────────────────────────────────┐
+│ MultiAgentSystem.__init__()             │
+│                                         │
+│ 1. 创建 4 个 Agent 实例                  │
+│    - orchestrator (LLM: temperature=0.7)│
+│    - search_agent (LLM: temperature=0.3)│
+│    - rag_agent    (LLM: temperature=0.5)│
+│    - code_agent   (LLM: temperature=0.7)│
+│                                         │
+│ 2. 构建工作流                            │
+│    - 创建 StateGraph(AgentState)        │
+│    - 添加 4 个节点                       │
+│    - 设置入口：orchestrator             │
+│    - 条件边：orchestrator → ?           │
+│    - 普通边：search/rag/code → orchestrator│
+│    - 编译：workflow.compile()           │
+└─────────────────────────────────────────┘
+
+执行阶段：
+用户输入："研究机器遗忘方法，解析算法，实现代码"
+  ↓
+[workflow.ainvoke(initial_state)]
+  ↓
+┌──────────────────────────────────┐
+│ orchestrator 节点（首次进入）      │
+│ - 调用 self.orchestrator.plan_tasks()│
+│ - LLM 拆解为 3 个子任务            │
+│   1. search: "搜索机器遗忘论文"    │
+│   2. rag: "解析核心算法"          │
+│   3. code: "实现示例代码"         │
+│ - current_task_index = 0         │
+└──────────────┬───────────────────┘
+               ↓ _route_to_agent()
+               返回 "search"
+               ↓
+┌──────────────────────────────────┐
+│ search 节点                       │
+│ - 获取 sub_tasks[0]              │
+│ - 调用 self.search_agent.search()│
+│ - 保存结果到 state["results"]    │
+│ - current_task_index = 1         │
+└──────────────┬───────────────────┘
+               ↓ (固定边)
+               ↓
+┌──────────────────────────────────┐
+│ orchestrator 节点（第二次进入）    │
+│ - sub_tasks 已存在，跳过拆解      │
+│ - current_task_index=1 < 3      │
+│ - 获取 sub_tasks[1] 信息         │
+└──────────────┬───────────────────┘
+               ↓ _route_to_agent()
+               返回 "rag"
+               ↓
+┌──────────────────────────────────┐
+│ rag 节点                          │
+│ - 获取 sub_tasks[1]              │
+│ - 调用 self.rag_agent.analyze()  │
+│ - 保存结果                        │
+│ - current_task_index = 2         │
+└──────────────┬───────────────────┘
+               ↓ (固定边)
+               ↓
+┌──────────────────────────────────┐
+│ orchestrator 节点（第三次进入）    │
+│ - current_task_index=2 < 3      │
+└──────────────┬───────────────────┘
+               ↓ _route_to_agent()
+               返回 "code"
+               ↓
+┌──────────────────────────────────┐
+│ code 节点                         │
+│ - 获取 sub_tasks[2]              │
+│ - 调用 self.code_agent.generate_code()│
+│ - 保存结果                        │
+│ - current_task_index = 3         │
+└──────────────┬───────────────────┘
+               ↓ (固定边)
+               ↓
+┌──────────────────────────────────┐
+│ orchestrator 节点（第四次进入）    │
+│ - current_task_index=3 ≥ 3      │
+│ - 所有任务完成，生成总结          │
+└──────────────┬───────────────────┘
+               ↓ _route_to_agent()
+               返回 None
+               ↓
+            [END] 工作流结束
+```
+
