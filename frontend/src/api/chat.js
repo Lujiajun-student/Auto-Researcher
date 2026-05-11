@@ -33,7 +33,20 @@ export function getMessages(sessionId) {
   })
 }
 
-// 发送消息（SSE 流式）
+// 发送消息（SSE 流式）- 返回原始 Response 对象用于流式读取
+export function sendMessageStream(sessionId, content) {
+  return request({
+    url: '/chat/send',
+    method: 'post',
+    data: {
+      session_id: sessionId,
+      content
+    },
+    responseType: 'stream' // 关键：设置为 stream 以获取原始响应流
+  })
+}
+
+// 发送消息（兼容旧接口）
 export function sendMessage(sessionId, content) {
   return request({
     url: '/chat/send',

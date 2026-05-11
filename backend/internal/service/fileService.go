@@ -10,45 +10,20 @@ import (
 
 // CreateFile 创建文件记录
 func CreateFile(file *models.File) error {
-	_, err := db.DB.Exec(
-		"INSERT INTO files (session_id, name, path, content, size, type, language, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		file.SessionID, file.Name, file.Path, file.Content, file.Size, file.Type, file.Language, file.CreatedAt,
-	)
-	return err
+	return db.GormDB.Create(file).Error
 }
 
 // GetFilesBySession 获取会话的所有文件
 func GetFilesBySession(sessionID uint) ([]*models.File, error) {
-	rows, err := db.DB.Query("SELECT * FROM files WHERE session_id = ? ORDER BY created_at ASC", sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	var files []*models.File
-	for rows.Next() {
-		var file models.File
-		err := rows.Scan(&file.ID, &file.SessionID, &file.Name, &file.Path, &file.Content, &file.Size, &file.Type, &file.Language, &file.CreatedAt)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, &file)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return files, nil
+	err := db.GormDB.Where("session_id = ?", sessionID).Order("created_at ASC").Find(&files).Error
+	return files, err
 }
 
 // GetFileByID 根据 ID 获取文件
 func GetFileByID(fileID uint) (*models.File, error) {
 	var file models.File
-	err := db.DB.QueryRow(
-		"SELECT * FROM files WHERE id = ?", fileID,
-	).Scan(&file.ID, &file.SessionID, &file.Name, &file.Path, &file.Content, &file.Size, &file.Type, &file.Language, &file.CreatedAt)
-
+	err := db.GormDB.First(&file, fileID).Error
 	if err != nil {
 		return nil, err
 	}
@@ -57,8 +32,7 @@ func GetFileByID(fileID uint) (*models.File, error) {
 
 // DeleteFile 删除文件
 func DeleteFile(fileID uint) error {
-	_, err := db.DB.Exec("DELETE FROM files WHERE id = ?", fileID)
-	return err
+	return db.GormDB.Delete(&models.File{}, fileID).Error
 }
 
 // BuildFileTree 构建文件树

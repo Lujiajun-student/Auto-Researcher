@@ -21,7 +21,7 @@ class OrchestratorAgent:
             model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
             base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             api_key=os.getenv("DEEPSEEK_API_KEY"),
-            temperature=0.7
+            temperature=float(os.getenv("DEEPSEEK_TEMPERATURE_ORCHESTRATOR", "0.7"))
         )
         
         # 系统提示词

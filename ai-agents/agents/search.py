@@ -10,6 +10,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import os
 import arxiv
 import json
+import time
+import random
 
 
 class SearchAgent:
@@ -22,7 +24,7 @@ class SearchAgent:
             model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
             base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             api_key=os.getenv("DEEPSEEK_API_KEY"),
-            temperature=0.3
+            temperature=float(os.getenv("DEEPSEEK_TEMPERATURE_SEARCH", "0.3"))
         )
         
         # 系统提示词
@@ -37,7 +39,7 @@ class SearchAgent:
 
     def search(self, query: str) -> Dict[str, Any]:
         """
-        执行搜索
+        执行搜索（带重试机制）
         
         Args:
             query: 搜索查询
@@ -47,55 +49,93 @@ class SearchAgent:
         """
         print(f"搜索查询：{query}")
         
-        try:
-            # 使用 arxiv API 搜索
-            search = arxiv.Search(
-                query=query,
-                max_results=10,
-                sort_by=arxiv.SortCriterion.Relevance
-            )
-            
-            papers = []
-            for result in search.results():
-                papers.append({
-                    "title": result.title,
-                    "authors": [str(author) for author in result.authors],
-                    "summary": result.summary,
-                    "published": result.published.strftime("%Y-%m-%d"),
-                    "link": result.entry_id,
-                    "pdf_link": result.pdf_url
-                })
-            
-            # 使用 LLM 总结搜索结果
-            summary = self._summarize_results(query, papers)
-            
-            result = {
-                "query": query,
-                "papers": papers,
-                "summary": summary,
-                "count": len(papers)
-            }
-            
-            # 添加文件信息
-            result["files"] = [{
-                "name": "search_results.md",
-                "path": "search/search_results.md",
-                "content": self._format_search_results(papers, summary),
-                "language": "markdown",
-                "description": "搜索结果汇总"
-            }]
-            
-            return result
-            
-        except Exception as e:
-            print(f"搜索失败：{e}")
-            return {
-                "query": query,
-                "papers": [],
-                "summary": f"搜索失败：{str(e)}",
-                "count": 0,
-                "files": []
-            }
+        max_retries = 3
+        retry_delay = 2  # 秒
+        
+        for attempt in range(max_retries):
+            try:
+                # 添加随机延迟避免并发请求
+                if attempt > 0:
+                    delay = retry_delay * (2 ** attempt) + random.uniform(0.5, 1.5)
+                    print(f"第 {attempt + 1} 次重试，延迟 {delay:.2f} 秒...")
+                    time.sleep(delay)
+                
+                # 使用 arxiv API 搜索
+                search = arxiv.Search(
+                    query=query,
+                    max_results=10,
+                    sort_by=arxiv.SortCriterion.Relevance
+                )
+                
+                papers = []
+                for result in search.results():
+                    papers.append({
+                        "title": result.title,
+                        "authors": [str(author) for author in result.authors],
+                        "summary": result.summary,
+                        "published": result.published.strftime("%Y-%m-%d"),
+                        "link": result.entry_id,
+                        "pdf_link": result.pdf_url
+                    })
+                
+                # 使用 LLM 总结搜索结果
+                summary = self._summarize_results(query, papers)
+                
+                result = {
+                    "query": query,
+                    "papers": papers,
+                    "summary": summary,
+                    "count": len(papers)
+                }
+                
+                # 添加文件信息
+                result["files"] = [{
+                    "name": "search_results.md",
+                    "path": "search/search_results.md",
+                    "content": self._format_search_results(papers, summary),
+                    "language": "markdown",
+                    "description": "搜索结果汇总"
+                }]
+                
+                if attempt > 0:
+                    print(f"第 {attempt + 1} 次重试成功！")
+                
+                return result
+                
+            except Exception as e:
+                error_msg = str(e)
+                print(f"第 {attempt + 1} 次搜索失败：{error_msg}")
+                
+                # 如果是 429 错误，继续重试
+                if "429" in error_msg or "Too Many Requests" in error_msg:
+                    if attempt < max_retries - 1:
+                        continue
+                    else:
+                        return {
+                            "query": query,
+                            "papers": [],
+                            "summary": f"搜索失败：arXiv API 请求过于频繁，请稍后再试（{error_msg}）",
+                            "count": 0,
+                            "files": []
+                        }
+                else:
+                    # 其他错误直接返回
+                    return {
+                        "query": query,
+                        "papers": [],
+                        "summary": f"搜索失败：{error_msg}",
+                        "count": 0,
+                        "files": []
+                    }
+        
+        # 所有重试都失败
+        return {
+            "query": query,
+            "papers": [],
+            "summary": "搜索失败：多次重试后仍然无法访问 arXiv API",
+            "count": 0,
+            "files": []
+        }
     
     def _summarize_results(self, query: str, papers: List[Dict]) -> str:
         """

@@ -3,7 +3,7 @@ CREATE DATABASE IF NOT EXISTS `auto_researcher`;
 USE `auto_researcher`;
 
 -- 创建用户表
-CREATE TABLE `user` (
+CREATE TABLE `users` (
                         `id`         INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
                         `username`   VARCHAR(50) NOT NULL UNIQUE     COMMENT '唯一用户名',
                         `password`   VARCHAR(255) NOT NULL           COMMENT '加密后的密码',

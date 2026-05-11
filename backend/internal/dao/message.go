@@ -1,4 +1,4 @@
-// Package dao 消息DAO模型
+// Package dao 消息 DAO 模型
 package dao
 
 import (
@@ -8,44 +8,17 @@ import (
 
 // CreateMessage 创建消息
 func CreateMessage(message *models.Message) error {
-	_, err := db.DB.Exec("INSERT INTO message (session_id, role, content) VALUES (?, ?, ?)", message.SessionID, message.Role, message.Content)
-	return err
+	return db.GormDB.Create(message).Error
 }
 
-// GetMessagesBySessionId 根据会话id查询会话所有消息
+// GetMessagesBySessionId 根据会话 id 查询会话所有消息
 func GetMessagesBySessionId(sessionId uint) ([]*models.Message, error) {
-
-	rows, err := db.DB.Query("SELECT * FROM message WHERE session_id = ?", sessionId)
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer rows.Close()
-
 	var messages []*models.Message
-
-	for rows.Next() {
-
-		var message models.Message
-
-		err := rows.Scan(&message.ID, &message.SessionID, &message.Role, &message.Content, &message.CreatedAt)
-		if err != nil {
-			return nil, err
-		}
-
-		messages = append(messages, &message)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return messages, nil
+	err := db.GormDB.Where("session_id = ?", sessionId).Order("created_at ASC").Find(&messages).Error
+	return messages, err
 }
 
-// DeleteMessageBySessionId 根据会话id删除会话所有消息
+// DeleteMessageBySessionId 根据会话 id 删除会话所有消息
 func DeleteMessageBySessionId(sessionId uint) error {
-	_, err := db.DB.Exec("DELETE FROM message WHERE session_id = ?", sessionId)
-	return err
+	return db.GormDB.Where("session_id = ?", sessionId).Delete(&models.Message{}).Error
 }

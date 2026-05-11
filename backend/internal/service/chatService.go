@@ -155,7 +155,7 @@ func shouldUseAgent(content string) (bool, string) {
 只需要返回 JSON，不需要其他内容。`
 
 	requestBody := DeepSeekRequest{
-		Model: "deepseek-v4-flash",
+		Model: os.Getenv("DEEPSEEK_MODEL"),
 		Messages: []DeepSeekMessage{
 			{
 				Role:    "user",
@@ -245,12 +245,40 @@ func shouldUseAgent(content string) (bool, string) {
 	return needsAgent, taskDesc
 }
 
-// callAgentSystem 调用 AI Agent 系统
-func callAgentSystem(taskDescription string) (string, error) {
+// buildAgentURL 构建 Agent 系统的 URL
+// 如果 isStream 为 true，则使用流式端点
+func buildAgentURL(isStream bool) string {
 	agentURL := os.Getenv("AGENT_SYSTEM_URL")
 	if agentURL == "" {
-		agentURL = "http://localhost:8000/api/v1/task/execute"
+		if isStream {
+			return "http://localhost:8000/api/v1/task/stream"
+		}
+		return "http://localhost:8000/api/v1/task/execute"
 	}
+
+	// 根据是否需要流式处理来构建 URL
+	if isStream {
+		if strings.Contains(agentURL, "/api/v1/task/execute") {
+			return strings.Replace(agentURL, "/api/v1/task/execute", "/api/v1/task/stream", 1)
+		} else if strings.Contains(agentURL, "/api/v1/task/stream") {
+			return agentURL
+		} else {
+			return strings.TrimRight(agentURL, "/") + "/api/v1/task/stream"
+		}
+	} else {
+		if strings.Contains(agentURL, "/api/v1/task/stream") {
+			return strings.Replace(agentURL, "/api/v1/task/stream", "/api/v1/task/execute", 1)
+		} else if strings.Contains(agentURL, "/api/v1/task/execute") {
+			return agentURL
+		} else {
+			return strings.TrimRight(agentURL, "/") + "/api/v1/task/execute"
+		}
+	}
+}
+
+// callAgentSystem 调用 AI Agent 系统
+func callAgentSystem(taskDescription string) (string, error) {
+	agentURL := buildAgentURL(false)
 
 	requestBody := AgentRequest{
 		Description: taskDescription,
@@ -348,23 +376,11 @@ func ProcessMessageStream(userID uint, sessionID uint, content string, callback 
 
 // callAgentSystemStream 流式调用 AI Agent 系统
 func callAgentSystemStream(taskDescription string, sessionID uint, callback func(eventType string, data map[string]interface{})) error {
-	agentURL := os.Getenv("AGENT_SYSTEM_URL")
-	if agentURL == "" {
-		agentURL = "http://localhost:8000"
-	}
-
-	// 如果 URL 包含 /api/v1/task/execute，替换为 /api/v1/task/stream
-	streamURL := agentURL
-	if strings.Contains(agentURL, "/api/v1/task/execute") {
-		streamURL = strings.Replace(agentURL, "/api/v1/task/execute", "/api/v1/task/stream", 1)
-	} else if !strings.Contains(agentURL, "/api/v1/task/stream") {
-		// 如果 URL 只是基础地址，追加流式端点
-		streamURL = strings.TrimRight(agentURL, "/") + "/api/v1/task/stream"
-	}
+	agentURL := buildAgentURL(true)
 
 	fmt.Printf("=== 开始流式调用 AI Agent 系统 ===\n")
 	fmt.Printf("任务描述：%s\n", taskDescription)
-	fmt.Printf("Stream URL: %s\n", streamURL)
+	fmt.Printf("Stream URL: %s\n", agentURL)
 
 	requestBody := AgentRequest{
 		Description: taskDescription,
@@ -375,7 +391,7 @@ func callAgentSystemStream(taskDescription string, sessionID uint, callback func
 		return fmt.Errorf("Agent 系统 JSON 序列化失败：%v", err)
 	}
 
-	req, err := http.NewRequest("POST", streamURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", agentURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("Agent 系统创建请求失败：%v", err)
 	}
@@ -909,7 +925,7 @@ func callDeepSeekAPIWithHistory(history []*models.Message, currentContent string
 
 	// 构建请求
 	requestBody := DeepSeekRequest{
-		Model:    "deepseek-v4-flash",
+		Model:    os.Getenv("DEEPSEEK_MODEL"),
 		Messages: messages,
 		Stream:   false,
 	}
@@ -976,7 +992,7 @@ func callDeepSeekAPI(userContent string) (string, error) {
 
 	// 构建请求
 	requestBody := DeepSeekRequest{
-		Model: "deepseek-v4-flash",
+		Model: os.Getenv("DEEPSEEK_MODEL"),
 		Messages: []DeepSeekMessage{
 			{
 				Role:    "system",
@@ -1064,7 +1080,7 @@ AI：` + aiResponse + `
 请直接返回标题：`
 
 	requestBody := DeepSeekRequest{
-		Model: "deepseek-v4-flash",
+		Model: os.Getenv("DEEPSEEK_MODEL"),
 		Messages: []DeepSeekMessage{
 			{
 				Role:    "user",
@@ -1153,6 +1169,9 @@ func UpdateSessionTitle(sessionID uint, title string) error {
 
 // updateSessionTitleInDB 在数据库中更新会话标题
 func updateSessionTitleInDB(sessionID uint, title string) error {
-	_, err := db.DB.Exec("UPDATE session SET title = ?, updated_at = ? WHERE id = ?", title, time.Now(), sessionID)
-	return err
+	updates := map[string]interface{}{
+		"title":      title,
+		"updated_at": time.Now(),
+	}
+	return db.GormDB.Model(&models.Session{}).Where("id = ?", sessionID).Updates(updates).Error
 }

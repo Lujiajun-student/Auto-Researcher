@@ -54,6 +54,12 @@
             <Close />
           </el-icon>
         </div>
+        <div class="tabs-bar-actions">
+          <el-button @click="handleLogout" text>
+            <el-icon><SwitchButton /></el-icon>
+            退出
+          </el-button>
+        </div>
       </div>
 
       <!-- 聊天内容区域 -->
@@ -66,10 +72,6 @@
           <div class="header-actions">
             <el-button @click="toggleRightSidebar" text>
               <el-icon><Files /></el-icon>
-            </el-button>
-            <el-button @click="handleLogout" text>
-              <el-icon><SwitchButton /></el-icon>
-              退出
             </el-button>
           </div>
         </div>
@@ -171,36 +173,44 @@
 
       <!-- 空状态 -->
       <div v-else class="empty-main">
-        <el-empty description="选择一个会话或文件开始" :image-size="120" />
+        <el-empty description="选择一个会话或文件开始" :image-size="200" />
       </div>
     </div>
 
     <!-- 右侧文件栏 -->
     <div class="right-sidebar" :class="{ 'collapsed': rightSidebarCollapsed }">
-      <div class="sidebar-header">
-        <span class="title">AI 生成的文件</span>
-        <div class="header-actions">
-          <el-button @click="loadFiles(chatStore.currentSessionId)" text title="刷新文件列表">
-            <el-icon><Refresh /></el-icon>
-          </el-button>
-          <el-button @click="toggleRightSidebar" text>
-            <el-icon><Fold /></el-icon>
-          </el-button>
-        </div>
+      <!-- 收起状态下的展开按钮 -->
+      <div v-if="rightSidebarCollapsed" class="expand-button" @click="toggleRightSidebar">
+        <el-icon><Expand /></el-icon>
       </div>
       
-      <div class="file-list" v-if="!rightSidebarCollapsed">
-        <div v-if="chatStore.fileTree.length > 0">
-          <file-tree-node
-            v-for="node in chatStore.fileTree"
-            :key="node.name"
-            :node="node"
-            @download="downloadFile"
-            @open="openFileTab"
-          />
+      <!-- 展开状态下的完整内容 -->
+      <template v-else>
+        <div class="sidebar-header">
+          <span class="title">AI 生成的文件</span>
+          <div class="header-actions">
+            <el-button @click="loadFiles(chatStore.currentSessionId)" text title="刷新文件列表">
+              <el-icon><Refresh /></el-icon>
+            </el-button>
+            <el-button @click="toggleRightSidebar" text>
+              <el-icon><Fold /></el-icon>
+            </el-button>
+          </div>
         </div>
-        <el-empty v-else description="暂无生成的文件" :image-size="80" />
-      </div>
+        
+        <div class="file-list">
+          <div v-if="chatStore.fileTree.length > 0">
+            <file-tree-node
+              v-for="node in chatStore.fileTree"
+              :key="node.name"
+              :node="node"
+              @download="downloadFile"
+              @open="openFileTab"
+            />
+          </div>
+          <el-empty v-else description="暂无生成的文件" :image-size="80" />
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -219,6 +229,7 @@ import {
   User, Monitor, Loading, Promotion, Document, Folder, FolderOpened, 
   Download, Refresh, ChatRound, Close, ArrowDown 
 } from '@element-plus/icons-vue'
+import { readSSEStream } from '@/utils/sse'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -538,52 +549,33 @@ const sendMessage = async () => {
       })
     })
     
-    if (!response.ok) {
-      throw new Error('发送失败')
-    }
+    // 使用 SSE 工具类读取流
+    let completeData = null
     
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let finalContent = ''
-    let hasCompleteContent = false
-    
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      
-      buffer += decoder.decode(value, { stream: true })
-      
-      // 处理 SSE 事件
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const dataStr = line.slice(6).trim()
-          if (!dataStr) continue
-          
-          try {
-            const event = JSON.parse(dataStr)
-            handleStreamEvent(event)
-            
-            // 收集最终内容
-            if (event.type === 'complete' && event.data && event.data.content) {
-              finalContent = event.data.content
-              hasCompleteContent = true
-            }
-          } catch (e) {
-            console.error('解析 SSE 事件失败:', e)
-          }
+    await readSSEStream(response, {
+      onEvent: (event) => {
+        console.log('[SSE] 收到事件:', event.type, event.data)
+        handleStreamEvent(event)
+        
+        // 保存完整数据
+        if (event.type === 'complete' && event.data) {
+          completeData = event.data
         }
-      }
-      
-      await nextTick()
-      scrollToBottom()
-    }
+      },
+      onError: (error) => {
+        console.error('[SSE] 错误:', error)
+      },
+      onComplete: () => {
+        console.log('[SSE] 流读取完成')
+      },
+      debug: true
+    })
     
-    // 保存最终消息
-    if (hasCompleteContent) {
+    // 处理完成后
+    if (completeData) {
+      // 优先使用 summary 字段，如果没有则使用 content
+      const finalContent = completeData.summary || completeData.content || ''
+      
       const aiMessage = {
         role: 'assistant',
         content: finalContent,
@@ -597,8 +589,8 @@ const sendMessage = async () => {
       ElMessage.success('发送成功')
     }
   } catch (error) {
-    console.error('发送消息失败:', error)
-    ElMessage.error('发送失败，请重试')
+    console.error('[SSE] 发送消息失败:', error)
+    ElMessage.error(`发送失败：${error.message}`)
   } finally {
     isThinking.value = false
     streamingContent.value = ''
@@ -612,9 +604,17 @@ const sendMessage = async () => {
 const handleStreamEvent = (event) => {
   const { type, data } = event
   
+  if (!type) {
+    console.warn('[SSE] 收到未知类型事件:', event)
+    return
+  }
+  
+  console.log('[SSE] 处理事件:', type, data)
+  
   switch (type) {
     case 'start':
       // 任务开始
+      console.log('[SSE] 任务开始')
       break
     
     case 'thinking':
@@ -622,7 +622,8 @@ const handleStreamEvent = (event) => {
       if (data && data.agent && data.message) {
         thinkingSteps.value.push({
           agent: getAgentName(data.agent),
-          message: data.message
+          message: data.message,
+          timestamp: Date.now()
         })
       }
       break
@@ -632,7 +633,9 @@ const handleStreamEvent = (event) => {
       if (data && data.sub_tasks) {
         thinkingSteps.value.push({
           agent: '规划',
-          message: `拆解为 ${data.count} 个子任务`
+          message: `拆解为 ${data.count || data.sub_tasks.length} 个子任务`,
+          subTasks: data.sub_tasks,
+          timestamp: Date.now()
         })
       }
       break
@@ -642,15 +645,18 @@ const handleStreamEvent = (event) => {
       if (data && data.agent) {
         thinkingSteps.value.push({
           agent: getAgentName(data.agent),
-          message: '任务完成'
+          message: '任务完成',
+          timestamp: Date.now()
         })
       }
       break
     
     case 'complete':
       // 全部完成
-      if (data && data.content) {
-        streamingContent.value = data.content
+      if (data) {
+        const content = data.summary || data.content || ''
+        streamingContent.value = content
+        console.log('[SSE] 完成，内容长度:', content.length)
       }
       break
     
@@ -658,8 +664,12 @@ const handleStreamEvent = (event) => {
       // 错误
       if (data && data.error) {
         streamingContent.value = `❌ 执行失败：${data.error}`
+        ElMessage.error(`执行失败：${data.error}`)
       }
       break
+    
+    default:
+      console.warn('[SSE] 未处理的事件类型:', type)
   }
 }
 
@@ -843,6 +853,11 @@ onUnmounted(() => {
   overflow-x: auto;
   min-height: 40px;
   padding: 4px 8px 0;
+}
+
+.tabs-bar-actions {
+  margin-left: auto;
+  padding-right: 8px;
 }
 
 .tabs-bar::-webkit-scrollbar {
@@ -1167,12 +1182,30 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   transition: width 0.3s;
+  position: relative;
 }
 
 .right-sidebar.collapsed {
-  width: 0;
-  border-left: none;
+  width: 40px;
+  border-left: 1px solid #e4e7ed;
   overflow: hidden;
+}
+
+.expand-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  color: #909399;
+  font-size: 20px;
+  transition: all 0.3s;
+}
+
+.expand-button:hover {
+  color: #409eff;
+  background: #f5f7fa;
 }
 
 .file-list {
