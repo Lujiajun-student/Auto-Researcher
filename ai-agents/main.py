@@ -18,6 +18,9 @@ from agents.search import SearchAgent
 from agents.rag import RAGAgent
 from agents.code import CodeAgent
 
+# 导入长期记忆模块
+from memory import LongTermMemory, MemoryType
+
 
 class AgentType(str, Enum):
     """Agent 类型枚举"""
@@ -54,6 +57,7 @@ class AgentState(TypedDict):
     messages: List[str]
     error: Optional[str]
     files: List[Dict[str, Any]]  # 新增：存储生成的文件信息
+    retrieved_memories: Optional[str]  # 新增：检索到的相关记忆（用于注入到提示词）
 
 
 class MultiAgentSystem:
@@ -66,6 +70,9 @@ class MultiAgentSystem:
         self.search_agent = SearchAgent()
         self.rag_agent = RAGAgent()
         self.code_agent = CodeAgent()
+        
+        # 初始化长期记忆
+        self.memory = LongTermMemory()
         
         # 构建 LangGraph 工作流
         self.workflow = self._build_workflow()
@@ -107,9 +114,27 @@ class MultiAgentSystem:
         """Orchestrator 节点"""
         print("\n=== Orchestrator 正在规划任务 ===")
         
-        # 如果是第一个节点，拆解任务
+        # 如果是第一个节点，检索长期记忆并拆解任务
         if not state.get("sub_tasks") or len(state.get("sub_tasks", [])) == 0:
-            sub_tasks = self.orchestrator.plan_tasks(state["original_task"])
+            # 检索相关长期记忆
+            print(f"\n[Memory] 正在检索与任务相关的长期记忆...")
+            retrieved = self.memory.search_memories(
+                query=state["original_task"],
+                top_k=self.memory.max_retrievals
+            )
+            
+            if retrieved:
+                state["retrieved_memories"] = self.memory.format_memories_for_prompt(retrieved)
+                print(f"[Memory] 找到 {len(retrieved)} 条相关记忆")
+            else:
+                state["retrieved_memories"] = None
+                print("[Memory] 未找到相关记忆")
+            
+            # 拆解任务（传入检索到的记忆）
+            sub_tasks = self.orchestrator.plan_tasks(
+                task_description=state["original_task"],
+                retrieved_memories=state["retrieved_memories"]
+            )
             state["sub_tasks"] = sub_tasks
             state["current_task_index"] = 0
             print(f"任务已拆解为 {len(sub_tasks)} 个子任务")
@@ -119,6 +144,10 @@ class MultiAgentSystem:
         # 检查是否所有任务都已完成
         if state["current_task_index"] >= len(state["sub_tasks"]):
             print("所有子任务已完成")
+            
+            # 将任务结果保存到长期记忆
+            self._save_task_result_to_memory(state)
+            
             # 添加总结信息到 results
             if "summary" not in state["results"]:
                 state["results"]["summary"] = self._generate_summary(state)
@@ -129,6 +158,38 @@ class MultiAgentSystem:
         print(f"\n当前执行任务：{current_task['description']}")
         
         return state
+    
+    def _save_task_result_to_memory(self, state: AgentState):
+        """将任务结果保存到长期记忆"""
+        try:
+            # 保存任务执行结果
+            summary = state["results"].get("summary", "")
+            if summary:
+                self.memory.add_memory(
+                    content=f"任务: {state['original_task']}\n结果: {summary}",
+                    memory_type=MemoryType.TASK_RESULT,
+                    metadata={
+                        "task_id": state["task_id"],
+                        "sub_tasks_count": len(state.get("sub_tasks", [])),
+                        "files_count": len(state.get("files", []))
+                    }
+                )
+            
+            # 保存生成的文件信息
+            for file_info in state.get("files", []):
+                self.memory.add_memory(
+                    content=f"生成文件: {file_info.get('name', 'unknown')}\n类型: {file_info.get('type', 'unknown')}",
+                    memory_type=MemoryType.KNOWLEDGE,
+                    metadata={
+                        "task_id": state["task_id"],
+                        "file_name": file_info.get("name", ""),
+                        "file_type": file_info.get("type", "")
+                    }
+                )
+            
+            print(f"[Memory] 任务结果已保存到长期记忆")
+        except Exception as e:
+            print(f"[Memory] 保存任务结果失败: {e}")
     
     def _search_node(self, state: AgentState) -> AgentState:
         """Search Agent 节点"""

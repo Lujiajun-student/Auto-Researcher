@@ -414,6 +414,10 @@ func callAgentSystemStream(taskDescription string, sessionID uint, callback func
 		return fmt.Errorf("Agent 系统返回错误状态码：%d, 响应：%s", resp.StatusCode, string(body))
 	}
 
+	// 保存完整的响应数据
+	var fullEventData map[string]interface{}
+	var hasCompleteEvent bool
+
 	// 读取 SSE 事件流
 	reader := resp.Body
 	buf := make([]byte, 4096)
@@ -448,6 +452,23 @@ func callAgentSystemStream(taskDescription string, sessionID uint, callback func
 
 					fmt.Printf("[SSE] 收到事件: type=%s\n", event.Type)
 
+					// 如果是 complete 事件，保存完整数据
+					if event.Type == "complete" {
+						fullEventData = event.Data
+						hasCompleteEvent = true
+						
+						// 增强 complete 事件，添加格式化的内容
+						formattedResponse := formatAgentResponseFromMap(map[string]interface{}{
+							"results": event.Data["results"],
+							"files": event.Data["files"],
+							"summary": event.Data["summary"],
+						})
+						if event.Data == nil {
+							event.Data = make(map[string]interface{})
+						}
+						event.Data["content"] = formattedResponse
+					}
+
 					// 回调处理事件
 					callback(event.Type, event.Data)
 				}
@@ -459,6 +480,50 @@ func callAgentSystemStream(taskDescription string, sessionID uint, callback func
 				break
 			}
 			return fmt.Errorf("读取 SSE 流失败：%v", err)
+		}
+	}
+
+	// 在流结束后，处理数据库保存
+	if hasCompleteEvent && fullEventData != nil {
+		fmt.Printf("[SSE] 流处理结束，开始保存数据到数据库\n")
+
+		// 1. 保存 AI 回复
+		var content string
+		if summary, ok := fullEventData["summary"].(string); ok {
+			content = summary
+		}
+
+		if content == "" {
+			content = formatAgentResponseFromMap(map[string]interface{}{
+				"results": fullEventData["results"],
+				"files": fullEventData["files"],
+				"summary": fullEventData["summary"],
+			})
+		}
+
+		aiMessage := &models.Message{
+			SessionID: sessionID,
+			Role:      "assistant",
+			Content:   content,
+			CreatedAt: time.Now(),
+		}
+		if err := SendMessage(aiMessage); err != nil {
+			fmt.Printf("[SSE] 保存 AI 回复失败：%v\n", err)
+		} else {
+			fmt.Printf("[SSE] AI 回复已保存到数据库\n")
+		}
+
+		// 2. 保存文件
+		if files, ok := fullEventData["files"].([]interface{}); ok && len(files) > 0 {
+			fmt.Printf("[SSE] 开始保存 %d 个文件\n", len(files))
+			fullResponse := map[string]interface{}{
+				"files": fullEventData["files"],
+			}
+			if saveErr := SaveAgentFiles(sessionID, fullResponse); saveErr != nil {
+				fmt.Printf("[SSE] 保存文件失败：%v\n", saveErr)
+			} else {
+				fmt.Printf("[SSE] 文件保存完成\n")
+			}
 		}
 	}
 

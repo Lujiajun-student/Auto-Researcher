@@ -26,7 +26,7 @@ func InitDB() {
 	port := os.Getenv("DATABASE_PORT")
 	dbname := os.Getenv("DATABASE_NAME")
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", user, pwd, host, port, dbname)
-	
+
 	// 初始化 sql.DB
 	DB, err = sql.Open("mysql", dsn)
 	if err != nil {
@@ -37,7 +37,7 @@ func InitDB() {
 		log.Fatalf("Error pinging database: %v", err)
 	}
 	fmt.Println("Successfully connected to database (sql.DB)")
-	
+
 	// 初始化 GORM
 	GormDB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {

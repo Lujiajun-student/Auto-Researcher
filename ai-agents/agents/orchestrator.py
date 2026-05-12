@@ -50,20 +50,30 @@ class OrchestratorAgent:
 
 确保任务拆解合理，Agent 类型选择正确。"""
 
-    def plan_tasks(self, task_description: str) -> List[Dict[str, Any]]:
+    def plan_tasks(self, task_description: str, retrieved_memories: str = None) -> List[Dict[str, Any]]:
         """
         规划子任务
         
         Args:
             task_description: 原始任务描述
+            retrieved_memories: 检索到的相关长期记忆（可选）
             
         Returns:
             子任务列表
         """
+        # 构建记忆上下文
+        memory_context = ""
+        if retrieved_memories:
+            memory_context = f"""
+
+以下是相关的历史记忆，请参考这些信息来优化任务拆解：
+{retrieved_memories}
+"""
+        
         # 构建提示词
         prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content=self.system_prompt),
-            HumanMessage(content=f"请拆解以下任务：{task_description}")
+            HumanMessage(content=f"请拆解以下任务：{task_description}{memory_context}")
         ])
         
         # 调用 LLM

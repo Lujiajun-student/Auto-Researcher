@@ -573,8 +573,8 @@ const sendMessage = async () => {
     
     // 处理完成后
     if (completeData) {
-      // 优先使用 summary 字段，如果没有则使用 content
-      const finalContent = completeData.summary || completeData.content || ''
+      // 优先使用 content 字段（后端增强后的），如果没有再用 summary
+      const finalContent = completeData.content || completeData.summary || ''
       
       const aiMessage = {
         role: 'assistant',
@@ -654,7 +654,7 @@ const handleStreamEvent = (event) => {
     case 'complete':
       // 全部完成
       if (data) {
-        const content = data.summary || data.content || ''
+        const content = data.content || data.summary || ''
         streamingContent.value = content
         console.log('[SSE] 完成，内容长度:', content.length)
       }
