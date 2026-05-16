@@ -167,7 +167,8 @@
           </div>
         </div>
         <div class="file-body">
-          <pre class="file-text">{{ activeTab.content || '加载中...' }}</pre>
+          <div v-if="isMarkdownFile(activeTab.title)" class="file-markdown" v-html="renderMarkdown(activeTab.content || '')"></div>
+          <pre v-else class="file-text">{{ activeTab.content || '加载中...' }}</pre>
         </div>
       </div>
 
@@ -368,6 +369,12 @@ const getCurrentTime = () => {
 
 const renderMarkdown = (content) => {
   return md.render(content)
+}
+
+const isMarkdownFile = (filename) => {
+  if (!filename) return false
+  const ext = filename.toLowerCase().split('.').pop()
+  return ext === 'md' || ext === 'markdown'
 }
 
 const loadSessions = async () => {
@@ -966,6 +973,111 @@ onUnmounted(() => {
   white-space: pre-wrap;
   word-wrap: break-word;
   color: #303133;
+}
+
+.file-markdown {
+  font-size: 15px;
+  line-height: 1.8;
+  color: #303133;
+}
+
+.file-markdown :deep(h1),
+.file-markdown :deep(h2),
+.file-markdown :deep(h3) {
+  margin-top: 24px;
+  margin-bottom: 12px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.file-markdown :deep(h1) {
+  font-size: 24px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.file-markdown :deep(h2) {
+  font-size: 20px;
+}
+
+.file-markdown :deep(h3) {
+  font-size: 18px;
+}
+
+.file-markdown :deep(p) {
+  margin: 0 0 12px 0;
+}
+
+.file-markdown :deep(ul),
+.file-markdown :deep(ol) {
+  margin: 0 0 12px 0;
+  padding-left: 24px;
+}
+
+.file-markdown :deep(li) {
+  margin: 4px 0;
+}
+
+.file-markdown :deep(code) {
+  background: #f5f7fa;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 14px;
+  color: #e74c3c;
+}
+
+.file-markdown :deep(pre) {
+  background: #282c34;
+  color: #abb2bf;
+  padding: 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+
+.file-markdown :deep(pre code) {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: 14px;
+}
+
+.file-markdown :deep(blockquote) {
+  border-left: 4px solid #409EFF;
+  padding-left: 16px;
+  margin: 12px 0;
+  color: #606266;
+  background: #f5f7fa;
+  padding: 12px 16px;
+  border-radius: 0 8px 8px 0;
+}
+
+.file-markdown :deep(a) {
+  color: #409EFF;
+  text-decoration: none;
+}
+
+.file-markdown :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.file-markdown :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+.file-markdown :deep(th),
+.file-markdown :deep(td) {
+  border: 1px solid #e4e7ed;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.file-markdown :deep(th) {
+  background: #f5f7fa;
+  font-weight: 600;
 }
 
 /* 空状态 */

@@ -6,6 +6,7 @@
 - [架构设计](#架构设计)
 - [Agent 介绍](#agent-介绍)
 - [长期记忆系统](#长期记忆系统)
+- [论文向量数据库 (RAG)](#论文向量数据库-rag)
 - [快速开始](#快速开始)
 - [API 接口](#api-接口)
 - [使用示例](#使用示例)
@@ -69,6 +70,7 @@
 - **LLM**: DeepSeek-v4-flash (支持 OpenAI 兼容 API)
 - **搜索**: arXiv API
 - **RAG**: LangChain + PyPDF2
+- **向量数据库**: ChromaDB (论文语义检索与缓存)
 - **代码执行**: Docker 沙箱
 - **API**: FastAPI
 
@@ -235,10 +237,114 @@ MEMORY_MAX_RETRIEVALS=3
 
 ### 后续扩展
 
-- **向量嵌入检索**：使用 OpenAI Embeddings + Chroma 实现语义检索
 - **记忆摘要**：定期将相似记忆合并为摘要
 - **记忆衰减**：根据访问频率和时间自动清理低价值记忆
 - **用户画像**：基于历史任务构建用户偏好模型
+
+---
+
+## 论文向量数据库 (RAG)
+
+### 概述
+
+系统使用 ChromaDB 作为向量数据库，实现论文的语义检索和智能缓存。Search Agent 搜索到的论文会自动存储到向量数据库中，后续相似查询可以直接从本地缓存获取，减少 API 调用并提高响应速度。
+
+### 核心能力
+
+- 📦 **自动存储**：Search Agent 搜索到的论文自动入库
+-  **语义检索**：基于向量相似度搜索相关论文
+- ⚡ **智能缓存**：优先从本地向量库检索，避免重复调用 arXiv API
+- 🔄 **自动去重**：使用论文 ID 避免重复存储
+
+### 工作流程
+
+```
+用户查询
+    ↓
+转换为英文关键词
+    ↓
+搜索本地 ChromaDB 向量库
+    ↓
+如果找到 ≥2 篇相关论文 → 直接返回缓存（快速响应）
+    ↓
+如果缓存不足 → 调用 arXiv API → 保存结果到向量库
+```
+
+### 技术实现
+
+**存储结构**：
+- **文档内容**：标题 + 摘要（用于向量嵌入）
+- **元数据**：作者、发表时间、链接、PDF 下载链接、搜索查询、添加时间
+
+**检索算法**：
+- 使用 ChromaDB 内置的向量相似度搜索
+- 返回最相关的 N 篇论文及其相似度距离
+
+### 代码示例
+
+```python
+from paper_store import get_paper_store
+
+# 获取论文存储实例
+paper_store = get_paper_store()
+
+# 添加论文
+papers = [
+    {
+        "title": "Machine Unlearning: Solutions and Challenges",
+        "authors": ["Cao, Y.", "Yang, J."],
+        "summary": "We present a comprehensive survey...",
+        "published": "2023-01-15",
+        "link": "https://arxiv.org/abs/xxx",
+        "pdf_link": "https://arxiv.org/pdf/xxx"
+    }
+]
+paper_store.add_papers(papers, query="machine unlearning")
+
+# 语义搜索
+results = paper_store.search_papers("如何删除训练数据", n_results=5)
+for paper in results:
+    print(f"标题: {paper['title']}")
+    print(f"相似度距离: {paper['distance']}")
+
+# 获取所有论文
+all_papers = paper_store.get_all_papers()
+print(f"共存储 {len(all_papers)} 篇论文")
+```
+
+### 配置说明
+
+向量数据库数据持久化到本地目录：
+
+```
+data/
+└── chroma_memory/
+    ├── chroma.sqlite3      # ChromaDB 数据库文件
+    └── *.bin               # 向量索引文件
+```
+
+### 使用效果
+
+**第一次搜索 "machine unlearning"：**
+```
+原始查询：研究机器遗忘方法
+ArXiv 搜索关键词：machine unlearning
+本地缓存不足，调用 arXiv API 搜索
+成功添加 3 篇论文到向量存储
+```
+
+**第二次搜索相关主题：**
+```
+原始查询：如何删除训练数据
+ArXiv 搜索关键词：machine unlearning delete training data
+从本地向量库找到 3 篇相关论文，直接使用缓存
+```
+
+### 依赖安装
+
+```bash
+pip install chromadb langchain-chroma
+```
 
 ---
 
@@ -458,7 +564,7 @@ Code Agent 使用 Docker 沙箱执行代码，需要确保：
 ### 功能增强
 
 - [ ] 支持更多学术数据库（Semantic Scholar, Google Scholar）
-- [ ] 添加向量数据库用于长期记忆
+- [x] 添加向量数据库用于论文缓存和检索
 - [ ] 实现多轮对话和迭代优化
 - [ ] 添加任务进度实时推送（SSE）
 - [ ] 支持分布式任务执行

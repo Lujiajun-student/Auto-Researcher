@@ -12,6 +12,11 @@ import arxiv
 import json
 import time
 import random
+import sys
+
+# 添加项目根目录到路径
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from paper_store import get_paper_store
 
 
 class SearchAgent:
@@ -37,6 +42,46 @@ class SearchAgent:
 
 请返回结构化的搜索结果。"""
 
+    def _extract_arxiv_keywords(self, query: str) -> str:
+        """
+        将用户查询转换为适合 arXiv 搜索的英文关键词
+        
+        Args:
+            query: 用户原始查询（可能是中文或冗长描述）
+            
+        Returns:
+            简洁的英文关键词
+        """
+        prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content="""你是一个 arXiv 搜索专家。你的任务是将用户的搜索查询转换为简洁的英文关键词，用于在 arXiv 上搜索学术论文。
+
+规则：
+1. 仅输出英文关键词，不要有其他解释性文字
+2. 使用学术领域常用的术语
+3. 关键词用空格分隔
+4. 不要添加标点符号
+5. 3-5个关键词最佳，不要超过10个
+6. 如果查询是中文，先翻译成英文再提取关键词
+
+示例：
+输入: "研究大模型机器遗忘的最新方法"
+输出: large language model machine forgetting unlearning
+
+输入: "transformer 改进相关论文"
+输出: transformer improvement attention mechanism
+"""),
+            HumanMessage(content=f"请将以下查询转换为 arXiv 搜索关键词：\n{query}")
+        ])
+        
+        chain = prompt | self.llm
+        response = chain.invoke({})
+        
+        # 清理结果：去除多余空格和换行
+        keywords = response.content.strip()
+        keywords = ' '.join(keywords.split())
+        
+        return keywords
+
     def search(self, query: str) -> Dict[str, Any]:
         """
         执行搜索（带重试机制）
@@ -47,8 +92,48 @@ class SearchAgent:
         Returns:
             搜索结果
         """
-        print(f"搜索查询：{query}")
+        print(f"原始查询：{query}")
         
+        # 先用 LLM 将查询转换为简洁的英文关键词
+        arxiv_query = self._extract_arxiv_keywords(query)
+        print(f"ArXiv 搜索关键词：{arxiv_query}")
+        
+        # 先尝试从本地向量数据库搜索
+        try:
+            paper_store = get_paper_store()
+            cached_papers = paper_store.search_papers(arxiv_query, n_results=3)
+            
+            if cached_papers and len(cached_papers) >= 2:
+                print(f"从本地向量库找到 {len(cached_papers)} 篇相关论文，直接使用缓存")
+                papers = self._convert_cached_papers(cached_papers)
+                
+                # 使用 LLM 总结搜索结果
+                summary = self._summarize_results(query, papers)
+                
+                result = {
+                    "query": query,
+                    "papers": papers,
+                    "summary": summary,
+                    "count": len(papers),
+                    "from_cache": True
+                }
+                
+                # 添加文件信息
+                result["files"] = [{
+                    "name": "search_results.md",
+                    "path": "search/search_results.md",
+                    "content": self._format_search_results(papers, summary),
+                    "language": "markdown",
+                    "description": "搜索结果汇总"
+                }]
+                
+                return result
+            else:
+                print("本地缓存不足，调用 arXiv API 搜索")
+        except Exception as e:
+            print(f"搜索本地向量库失败: {e}，将调用 arXiv API")
+        
+        # 调用 arXiv API 搜索
         max_retries = 3
         retry_delay = 2  # 秒
         
@@ -62,8 +147,8 @@ class SearchAgent:
                 
                 # 使用 arxiv API 搜索
                 search = arxiv.Search(
-                    query=query,
-                    max_results=10,
+                    query=arxiv_query,
+                    max_results=3,
                     sort_by=arxiv.SortCriterion.Relevance
                 )
                 
@@ -81,11 +166,19 @@ class SearchAgent:
                 # 使用 LLM 总结搜索结果
                 summary = self._summarize_results(query, papers)
                 
+                # 将论文保存到向量数据库
+                try:
+                    paper_store = get_paper_store()
+                    paper_store.add_papers(papers, query)
+                except Exception as e:
+                    print(f"保存论文到向量数据库失败: {e}")
+                
                 result = {
                     "query": query,
                     "papers": papers,
                     "summary": summary,
-                    "count": len(papers)
+                    "count": len(papers),
+                    "from_cache": False
                 }
                 
                 # 添加文件信息
@@ -153,11 +246,11 @@ class SearchAgent:
         
         # 构建论文信息
         papers_info = ""
-        for i, paper in enumerate(papers[:5], 1):  # 只取前 5 篇
+        for i, paper in enumerate(papers, 1):
             papers_info += f"{i}. {paper['title']}\n"
             papers_info += f"   作者：{', '.join(paper['authors'][:3])}{' et al.' if len(paper['authors']) > 3 else ''}\n"
             papers_info += f"   时间：{paper['published']}\n"
-            papers_info += f"   摘要：{paper['summary'][:200]}...\n\n"
+            papers_info += f"   摘要：{paper['summary']}\n\n"
         
         # 调用 LLM 总结
         prompt = ChatPromptTemplate.from_messages([
@@ -179,6 +272,30 @@ class SearchAgent:
         
         return response.content
     
+    def _convert_cached_papers(self, cached_papers: List[Dict]) -> List[Dict]:
+        """
+        将缓存的论文转换为标准格式
+        
+        Args:
+            cached_papers: 从向量库检索的论文
+            
+        Returns:
+            标准格式的论文列表
+        """
+        papers = []
+        for cached in cached_papers:
+            paper = {
+                "title": cached.get("title", ""),
+                "authors": cached.get("authors", "").split(", ") if cached.get("authors") else [],
+                "summary": cached.get("document", "").replace("标题: ", "").replace("\n摘要: ", "\n") if cached.get("document") else "",
+                "published": cached.get("published", ""),
+                "link": cached.get("link", ""),
+                "pdf_link": cached.get("pdf_link", ""),
+                "distance": cached.get("distance")
+            }
+            papers.append(paper)
+        return papers
+    
     def _format_search_results(self, papers: List[Dict], summary: str) -> str:
         """
         格式化搜索结果
@@ -199,7 +316,7 @@ class SearchAgent:
             result += f"### {i}. {paper['title']}\n\n"
             result += f"**作者**: {', '.join(paper['authors'][:3])}{' et al.' if len(paper['authors']) > 3 else ''}\n\n"
             result += f"**发表时间**: {paper['published']}\n\n"
-            result += f"**摘要**: {paper['summary'][:300]}...\n\n"
+            result += f"**摘要**: {paper['summary']}\n\n"
             result += f"[🔗 查看论文]({paper['link']})\n\n"
             result += f"[📄 PDF 下载]({paper['pdf_link']})\n\n"
             result += "---\n\n"

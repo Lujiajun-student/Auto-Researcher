@@ -229,8 +229,15 @@ class MultiAgentSystem:
         
         current_task = state["sub_tasks"][state["current_task_index"]]
         
-        # 执行 RAG
-        result = self.rag_agent.analyze(current_task["description"])
+        # 获取 Search Agent 的结果（如果存在）
+        search_results = None
+        for task in state["sub_tasks"]:
+            if task["type"] == "search" and task.get("result"):
+                search_results = task["result"]
+                break
+        
+        # 执行 RAG（传入搜索结果）
+        result = self.rag_agent.analyze(current_task["description"], search_results=search_results)
         
         # 保存结果
         state["results"][current_task["id"]] = result
