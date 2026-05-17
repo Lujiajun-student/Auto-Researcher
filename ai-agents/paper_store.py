@@ -43,15 +43,15 @@ class PaperVectorStore:
             )
         )
         
-        # 初始化嵌入函数（使用更强的 all-mpnet-base-v2 模型）
-        self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+        # 使用 all-mpnet-base-v2 嵌入模型（更强的语义理解能力）
+        embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name="all-mpnet-base-v2"
         )
         
         # 获取或创建论文集合
         self.collection = self.client.get_or_create_collection(
             name="papers",
-            embedding_function=self.embedding_function,
+            embedding_function=embedding_fn,
             metadata={"description": "Academic papers from arXiv"}
         )
         

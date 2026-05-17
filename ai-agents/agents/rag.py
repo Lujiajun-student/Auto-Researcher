@@ -7,7 +7,6 @@ from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
 import requests
 import PyPDF2
@@ -25,13 +24,6 @@ class RAGAgent:
             base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             api_key=os.getenv("DEEPSEEK_API_KEY"),
             temperature=float(os.getenv("DEEPSEEK_TEMPERATURE_RAG", "0.5"))
-        )
-        
-        # 初始化文本分块器
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,      # 每个 chunk 约 1000 tokens
-            chunk_overlap=200,    # 重叠 200 tokens，避免信息丢失
-            separators=["\n\n", "\n", "。", ".", " "]
         )
         
         # 系统提示词
@@ -78,26 +70,9 @@ class RAGAgent:
             
             # 如果查询是 URL，下载并解析 PDF
             if query.startswith("http"):
-                # 保存 PDF 到本地
-                pdf_filename = query.split("/")[-1] if "/" in query else "paper.pdf"
-                pdf_path = f"data/papers/{pdf_filename}"
-                
-                pdf_content = self._download_pdf(query, save_path=pdf_path)
+                pdf_content = self._download_pdf(query)
                 if pdf_content:
-                    # 提取文本
                     text = self._extract_text_from_pdf(pdf_content)
-                    
-                    # 分块
-                    metadata = {"source_url": query, "paper_type": "pdf"}
-                    chunks = self._chunk_text(text, metadata)
-                    
-                    # 生成向量嵌入
-                    chunks = self._embed_chunks(chunks)
-                    
-                    # 存储到向量数据库
-                    self._store_chunks_to_chroma(chunks, metadata)
-                    
-                    # 分析论文
                     analysis = self._analyze_paper_text(text)
                     
                     analysis["files"] = [{
@@ -135,29 +110,19 @@ class RAGAgent:
                 "files": []
             }
     
-    def _download_pdf(self, url: str, save_path: str = None) -> bytes:
+    def _download_pdf(self, url: str) -> bytes:
         """
         下载 PDF 文件
         
         Args:
             url: PDF 链接
-            save_path: 保存路径（可选）
             
         Returns:
             PDF 二进制内容
         """
         try:
-            print(f"正在下载 PDF: {url}")
-            response = requests.get(url, timeout=60)
+            response = requests.get(url, timeout=30)
             response.raise_for_status()
-            
-            # 保存到本地（如果指定了路径）
-            if save_path:
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                with open(save_path, 'wb') as f:
-                    f.write(response.content)
-                print(f"PDF 已保存到: {save_path}")
-            
             return response.content
         except Exception as e:
             print(f"下载 PDF 失败：{e}")
@@ -177,111 +142,13 @@ class RAGAgent:
             pdf_reader = PyPDF2.PdfReader(BytesIO(pdf_content))
             text = ""
             
-            for i, page in enumerate(pdf_reader.pages):
-                page_text = page.extract_text()
-                text += f"\n--- Page {i+1} ---\n{page_text}"
+            for page in pdf_reader.pages:
+                text += page.extract_text()
             
-            print(f"成功提取 {len(pdf_reader.pages)} 页文本，共 {len(text)} 字符")
             return text
         except Exception as e:
             print(f"提取 PDF 文本失败：{e}")
             return ""
-    
-    def _chunk_text(self, text: str, metadata: Dict = None) -> List[Dict]:
-        """
-        将文本分块
-        
-        Args:
-            text: 完整文本
-            metadata: 元数据（论文信息）
-            
-        Returns:
-            分块列表，每个块包含内容和元数据
-        """
-        # 使用分块器切分文本
-        chunks = self.text_splitter.split_text(text)
-        
-        print(f"文本分块完成，共 {len(chunks)} 个块")
-        
-        # 为每个块添加元数据
-        chunked_docs = []
-        for i, chunk in enumerate(chunks):
-            chunk_metadata = {
-                "chunk_index": i,
-                "total_chunks": len(chunks),
-                "chunk_length": len(chunk),
-            }
-            if metadata:
-                chunk_metadata.update(metadata)
-            
-            chunked_docs.append({
-                "content": chunk,
-                "metadata": chunk_metadata
-            })
-        
-        return chunked_docs
-    
-    def _embed_chunks(self, chunks: List[Dict]) -> List[Dict]:
-        """
-        将文本块转换为向量嵌入
-        
-        Args:
-            chunks: 分块列表
-            
-        Returns:
-            包含向量嵌入的分块列表
-        """
-        try:
-            # 使用 ChromaDB 的嵌入函数
-            from paper_store import get_paper_store
-            paper_store = get_paper_store()
-            
-            # 提取所有文本内容
-            texts = [chunk["content"] for chunk in chunks]
-            
-            # 批量生成嵌入向量
-            embeddings = paper_store.embedding_function(texts)
-            
-            # 将向量添加到分块中
-            for i, chunk in enumerate(chunks):
-                chunk["embedding"] = embeddings[i]
-            
-            print(f"成功生成 {len(embeddings)} 个向量嵌入")
-            return chunks
-            
-        except Exception as e:
-            print(f"生成向量嵌入失败：{e}")
-            # 返回没有嵌入向量的分块
-            return chunks
-    
-    def _store_chunks_to_chroma(self, chunks: List[Dict], metadata: Dict):
-        """
-        将分块存储到 ChromaDB 向量数据库
-        
-        Args:
-            chunks: 分块列表
-            metadata: 元数据
-        """
-        try:
-            from paper_store import get_paper_store
-            paper_store = get_paper_store()
-            
-            # 准备存储数据
-            texts = [chunk["content"] for chunk in chunks]
-            metadatas = [chunk["metadata"] for chunk in chunks]
-            ids = [f"chunk_{metadata.get('source_url', 'unknown')}_{i}" for i in range(len(chunks))]
-            
-            # 存储到 ChromaDB
-            paper_store.collection.add(
-                documents=texts,
-                metadatas=metadatas,
-                ids=ids
-            )
-            
-            print(f"成功将 {len(chunks)} 个分块存储到向量数据库")
-            
-        except Exception as e:
-            print(f"存储到向量数据库失败：{e}")
     
     def _analyze_paper_text(self, text: str) -> Dict[str, Any]:
         """

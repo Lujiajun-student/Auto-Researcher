@@ -168,7 +168,21 @@
         </div>
         <div class="file-body">
           <div v-if="isMarkdownFile(activeTab.title)" class="file-markdown" v-html="renderMarkdown(activeTab.content || '')"></div>
-          <pre v-else class="file-text">{{ activeTab.content || '加载中...' }}</pre>
+          <div v-else class="code-highlight-container">
+            <div class="code-header">
+              <span class="code-language">{{ getLanguageFromFilename(activeTab.title) }}</span>
+              <el-button 
+                class="copy-btn" 
+                size="small" 
+                text
+                @click="copyCode(activeTab.content)"
+              >
+                <el-icon><Document /></el-icon>
+                复制
+              </el-button>
+            </div>
+            <pre class="code-highlight"><code v-html="highlightCode(activeTab.content, getLanguageFromFilename(activeTab.title))"></code></pre>
+          </div>
         </div>
       </div>
 
@@ -225,6 +239,8 @@ import { useChatStore } from '@/stores/chat'
 import { getSessions, createSession, deleteSession as deleteSessionApi, getMessages, sendMessage as sendChatMessage, getFiles } from '@/api/chat'
 import { logout } from '@/api/auth'
 import markdownIt from 'markdown-it'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github.css'
 import { 
   Fold, Plus, ChatDotRound, Delete, Expand, Files, SwitchButton, 
   User, Monitor, Loading, Promotion, Document, Folder, FolderOpened, 
@@ -258,6 +274,146 @@ const thinkingSteps = ref([])
 const thinkingExpanded = ref(true)
 
 const md = markdownIt()
+
+// 代码高亮函数
+const highlightCode = (code, language) => {
+  if (!code) return ''
+  
+  if (language && hljs.getLanguage(language)) {
+    try {
+      return hljs.highlight(code, { language }).value
+    } catch (err) {
+      console.warn('代码高亮失败:', err)
+    }
+  }
+  
+  // 自动检测语言
+  try {
+    return hljs.highlightAuto(code).value
+  } catch (err) {
+    console.warn('自动代码高亮失败:', err)
+  }
+  
+  // 如果都失败，返回原始代码的 HTML 转义
+  return code.replace(/&/g, '&amp;')
+             .replace(/</g, '&lt;')
+             .replace(/>/g, '&gt;')
+}
+
+// 根据文件名获取语言
+const getLanguageFromFilename = (filename) => {
+  if (!filename) return 'text'
+  
+  const ext = filename.toLowerCase().split('.').pop()
+  
+  const languageMap = {
+    'py': 'python',
+    'js': 'javascript',
+    'ts': 'typescript',
+    'jsx': 'jsx',
+    'tsx': 'tsx',
+    'vue': 'xml',
+    'html': 'html',
+    'htm': 'html',
+    'css': 'css',
+    'scss': 'scss',
+    'sass': 'sass',
+    'less': 'less',
+    'json': 'json',
+    'xml': 'xml',
+    'yaml': 'yaml',
+    'yml': 'yaml',
+    'md': 'markdown',
+    'markdown': 'markdown',
+    'sql': 'sql',
+    'sh': 'bash',
+    'bash': 'bash',
+    'zsh': 'bash',
+    'ps1': 'powershell',
+    'go': 'go',
+    'rs': 'rust',
+    'java': 'java',
+    'c': 'c',
+    'cpp': 'cpp',
+    'h': 'c',
+    'hpp': 'cpp',
+    'cs': 'csharp',
+    'php': 'php',
+    'rb': 'ruby',
+    'swift': 'swift',
+    'kt': 'kotlin',
+    'scala': 'scala',
+    'r': 'r',
+    'm': 'matlab',
+    'lua': 'lua',
+    'perl': 'perl',
+    'pl': 'perl',
+    'dockerfile': 'dockerfile',
+    'makefile': 'makefile',
+    'cmake': 'cmake',
+    'ini': 'ini',
+    'toml': 'toml',
+    'cfg': 'ini',
+    'conf': 'nginx',
+    'nginx': 'nginx',
+    'apache': 'apache',
+    'diff': 'diff',
+    'patch': 'diff',
+    'tex': 'latex',
+    'latex': 'latex',
+    'graphql': 'graphql',
+    'gql': 'graphql',
+    'proto': 'protobuf',
+    'dart': 'dart',
+    'elm': 'elm',
+    'erl': 'erlang',
+    'haskell': 'haskell',
+    'hs': 'haskell',
+    'clojure': 'clojure',
+    'clj': 'clojure',
+    'lisp': 'lisp',
+    'scheme': 'scheme',
+    'fortran': 'fortran',
+    'f90': 'fortran',
+    'matlab': 'matlab',
+    'octave': 'matlab',
+    'julia': 'julia',
+    'groovy': 'groovy',
+    'gradle': 'gradle',
+    'vhdl': 'vhdl',
+    'verilog': 'verilog',
+    'v': 'verilog',
+    'systemverilog': 'systemverilog',
+    'sv': 'systemverilog',
+    'tcl': 'tcl',
+    'awk': 'awk',
+    'sed': 'sed',
+    'vim': 'vim',
+    'vimscript': 'vim',
+    'elixir': 'elixir',
+    'ex': 'elixir',
+    'exs': 'elixir',
+    'ocaml': 'ocaml',
+    'ml': 'ocaml',
+    'reason': 'reasonml',
+    're': 'reasonml',
+    'pascal': 'pascal',
+    'delphi': 'delphi',
+    'objectpascal': 'pascal',
+    'ada': 'ada',
+    'cobol': 'cobol',
+    'livescript': 'livescript',
+    'purescript': 'purescript',
+    'coffeescript': 'coffeescript',
+    'coffee': 'coffeescript',
+    'typescriptreact': 'tsx',
+    'javascriptreact': 'jsx',
+    'txt': 'text',
+    'log': 'accesslog'
+  }
+  
+  return languageMap[ext] || 'text'
+}
 
 // 文件树组件
 const FileTreeNode = {
@@ -369,6 +525,28 @@ const getCurrentTime = () => {
 
 const renderMarkdown = (content) => {
   return md.render(content)
+}
+
+// 复制代码到剪贴板
+const copyCode = async (code) => {
+  if (!code) return
+  
+  try {
+    await navigator.clipboard.writeText(code)
+    ElMessage.success('代码已复制到剪贴板')
+  } catch (err) {
+    console.error('复制失败:', err)
+    // 降级方案
+    const textarea = document.createElement('textarea')
+    textarea.value = code
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    ElMessage.success('代码已复制到剪贴板')
+  }
 }
 
 const isMarkdownFile = (filename) => {
@@ -973,6 +1151,74 @@ onUnmounted(() => {
   white-space: pre-wrap;
   word-wrap: break-word;
   color: #303133;
+}
+
+/* 代码高亮容器 */
+.code-highlight-container {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e4e7ed;
+  background: #f6f8fa;
+}
+
+.code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: #f1f3f5;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.code-language {
+  font-size: 12px;
+  color: #606266;
+  text-transform: uppercase;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+.copy-btn {
+  color: #606266 !important;
+  font-size: 12px;
+}
+
+.copy-btn:hover {
+  color: #409EFF !important;
+}
+
+.code-highlight {
+  margin: 0;
+  padding: 16px;
+  overflow-x: auto;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  background: #f6f8fa;
+}
+
+.code-highlight code {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* 代码高亮滚动条 */
+.code-highlight::-webkit-scrollbar {
+  height: 8px;
+}
+
+.code-highlight::-webkit-scrollbar-track {
+  background: #f1f3f5;
+}
+
+.code-highlight::-webkit-scrollbar-thumb {
+  background: #c0c4cc;
+  border-radius: 4px;
+}
+
+.code-highlight::-webkit-scrollbar-thumb:hover {
+  background: #909399;
 }
 
 .file-markdown {

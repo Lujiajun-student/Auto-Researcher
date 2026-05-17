@@ -11,6 +11,9 @@ import os
 import subprocess
 import tempfile
 import docker
+import json
+import re
+import ast
 
 
 class CodeAgent:
@@ -146,9 +149,6 @@ class CodeAgent:
         Returns:
             (code, files, directory_structure) 元组
         """
-        import re
-        import json
-        
         files = []
         directory_structure = ""
         code = ""
@@ -156,25 +156,76 @@ class CodeAgent:
         print(f"[Code Agent] 尝试从响应中提取文件...")
         print(f"响应长度：{len(text)}")
         
-        # 尝试提取 JSON 格式的文件列表
-        json_pattern = r"```(?:json)?\n(\{[\s\S]*?\})\n```"
-        json_matches = re.findall(json_pattern, text, re.DOTALL)
+        # 首先尝试直接解析 JSON（不要求在代码块内）
+        try:
+            # 尝试找到文本中的 JSON 对象
+            # 寻找第一个 { 和对应的 }
+            start_idx = text.find('{')
+            if start_idx >= 0:
+                # 找到匹配的结束 }
+                brace_count = 0
+                end_idx = -1
+                for i, char in enumerate(text[start_idx:]):
+                    if char == '{':
+                        brace_count += 1
+                    elif char == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            end_idx = start_idx + i + 1
+                            break
+                
+                if end_idx > start_idx:
+                    json_text = text[start_idx:end_idx]
+                    
+                    # 尝试修复 JSON 中的换行符问题
+                    # 在解析之前先替换可能的未转义换行符
+                    try:
+                        data = json.loads(json_text)
+                    except json.JSONDecodeError as e:
+                        print(f"标准解析失败，尝试修复 JSON: {e}")
+                        try:
+                            # 尝试将其作为 Python 字典字面量解析
+                            data = ast.literal_eval(json_text)
+                        except:
+                            # 更智能地修复 JSON 中的换行符
+                            # 我们需要找出所有的字符串字面量并替换其中的换行符
+                            fixed_json = self._fix_json_newlines(json_text)
+                            data = json.loads(fixed_json)
+                    
+                    if "files" in data:
+                        files = data["files"]
+                        print(f"从文本中直接提取到 {len(files)} 个文件")
+                    if "directory_structure" in data:
+                        directory_structure = data["directory_structure"]
+                    if "main_code" in data:
+                        code = data["main_code"]
+                    elif "code" in data:
+                        code = data["code"]
+        except Exception as e:
+            print(f"直接解析 JSON 失败：{e}")
         
-        print(f"JSON 匹配结果：{len(json_matches)} 个")
-        
-        if json_matches:
-            try:
-                data = json.loads(json_matches[0])
-                if "files" in data:
-                    files = data["files"]
-                    print(f"从 JSON 中提取到 {len(files)} 个文件")
-                if "directory_structure" in data:
-                    directory_structure = data["directory_structure"]
-                if "main_code" in data:
-                    code = data["main_code"]
-            except Exception as e:
-                print(f"解析 JSON 失败：{e}")
-                pass
+        # 如果没有提取到文件，尝试从代码块中解析 JSON
+        if not files:
+            json_pattern = r"```(?:json)?\n(\{[\s\S]*?\})\n```"
+            json_matches = re.findall(json_pattern, text, re.DOTALL)
+            
+            print(f"JSON 匹配结果：{len(json_matches)} 个")
+            
+            if json_matches:
+                try:
+                    data = json.loads(json_matches[0])
+                    if "files" in data:
+                        files = data["files"]
+                        print(f"从 JSON 代码块中提取到 {len(files)} 个文件")
+                    if "directory_structure" in data:
+                        directory_structure = data["directory_structure"]
+                    if "main_code" in data:
+                        code = data["main_code"]
+                    elif "code" in data:
+                        code = data["code"]
+                except Exception as e:
+                    print(f"解析 JSON 代码块失败：{e}")
+                    pass
         
         # 如果没有提取到文件，尝试提取代码块
         if not files:
@@ -184,29 +235,53 @@ class CodeAgent:
             print(f"代码块匹配结果：{len(code_matches)} 个")
             
             if code_matches:
-                code = code_matches[0].strip()
-                # 创建一个默认文件
+                # 找到所有代码块，分别保存
+                for i, code_block in enumerate(code_matches):
+                    if i == 0:
+                        code = code_block.strip()
+                    
+                    # 尝试从代码块前的文本提取文件名
+                    file_name = f"main_{i+1}.py" if i > 0 else "main.py"
+                    file_desc = f"代码文件 {i+1}"
+                    
+                    files.append({
+                        "name": file_name,
+                        "path": file_name,
+                        "content": code_block.strip(),
+                        "language": "python",
+                        "description": file_desc
+                    })
+                
+                print(f"从代码块创建了 {len(files)} 个文件")
+        
+        # 如果仍然没有文件，尝试清理响应并创建合理的文件
+        if not files:
+            print("未提取到代码块，尝试清理响应...")
+            
+            # 尝试从响应中提取合理的代码
+            # 移除 JSON 标记和多余的文本
+            cleaned_text = self._clean_response(text)
+            
+            if cleaned_text and len(cleaned_text) > 0:
+                code = cleaned_text
                 files = [{
                     "name": "main.py",
                     "path": "main.py",
                     "content": code,
                     "language": "python",
-                    "description": "主要代码文件"
+                    "description": "生成的代码"
                 }]
-                print(f"从代码块创建了 1 个默认文件")
-        
-        # 如果仍然没有文件，使用整个响应作为代码
-        if not files:
-            print("未提取到代码块，使用整个响应作为代码...")
-            code = text.strip()
-            files = [{
-                "name": "code.txt",
-                "path": "code.txt",
-                "content": text,
-                "language": "text",
-                "description": "生成的代码"
-            }]
-            print(f"创建了 1 个文本文件")
+                print(f"创建了清理后的代码文件")
+            else:
+                # 如果无法清理，保存完整响应但重命名文件为说明文件
+                files = [{
+                    "name": "response.md",
+                    "path": "response.md",
+                    "content": "# AI 响应\n\n" + text,
+                    "language": "markdown",
+                    "description": "AI 的完整响应"
+                }]
+                print(f"创建了响应说明文件")
         
         # 如果没有目录结构，创建一个简单的
         if not directory_structure and files:
@@ -214,6 +289,115 @@ class CodeAgent:
         
         print(f"最终提取结果：{len(files)} 个文件")
         return code, files, directory_structure
+    
+    def _fix_json_newlines(self, json_str: str) -> str:
+        """
+        修复 JSON 字符串中未转义的换行符
+        
+        Args:
+            json_str: 原始 JSON 字符串
+            
+        Returns:
+            修复后的 JSON 字符串
+        """
+        result = []
+        in_string = False
+        escape_next = False
+        
+        for char in json_str:
+            if escape_next:
+                result.append(char)
+                escape_next = False
+            elif char == '\\':
+                result.append(char)
+                escape_next = True
+            elif char == '"':
+                result.append(char)
+                in_string = not in_string
+            elif char == '\n' and in_string:
+                # 在字符串中的换行符替换为 \n
+                result.append('\\n')
+            elif char == '\r' and in_string:
+                # 在字符串中的回车符替换为 \r
+                result.append('\\r')
+            elif char == '\t' and in_string:
+                # 在字符串中的制表符替换为 \t
+                result.append('\\t')
+            else:
+                result.append(char)
+        
+        return ''.join(result)
+    
+    def _clean_response(self, text: str) -> str:
+        """
+        清理响应文本，移除 JSON 标记等非代码内容
+        
+        Args:
+            text: 原始响应文本
+            
+        Returns:
+            清理后的代码
+        """
+        # 1. 移除 JSON 标记
+        cleaned = re.sub(r'^```json\n', '', text)
+        cleaned = re.sub(r'\n```$', '', cleaned)
+        
+        # 2. 尝试从 JSON 中提取 content/code/files 字段
+        try:
+            data = json.loads(cleaned)
+            if "content" in data:
+                return data["content"]
+            if "code" in data:
+                return data["code"]
+            if "files" in data and isinstance(data["files"], list) and len(data["files"]) > 0:
+                if "content" in data["files"][0]:
+                    return data["files"][0]["content"]
+        except:
+            pass
+        
+        # 3. 如果还是 JSON，尝试提取 main_code 或 files[0].content
+        # 简单的字符串匹配
+        patterns = [
+            r'"main_code"\s*:\s*"([^"]*(?:\\"[^"]*)*)"',
+            r'"code"\s*:\s*"([^"]*(?:\\"[^"]*)*)"',
+            r'"content"\s*:\s*"([^"]*(?:\\"[^"]*)*)"',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                content = match.group(1)
+                # 恢复转义字符
+                content = content.replace('\\"', '"')
+                content = content.replace('\\n', '\n')
+                content = content.replace('\\t', '\t')
+                return content
+        
+        # 4. 如果都失败，尝试移除 JSON 结构，保留看起来像代码的部分
+        # 查找第一个可能是 Python 代码的部分
+        lines = text.split('\n')
+        code_lines = []
+        
+        for line in lines:
+            # 跳过明显的 JSON 标记行
+            stripped = line.strip()
+            if stripped.startswith('{') or stripped.startswith('}') or stripped.startswith('"files"') or stripped.startswith('"main_code"'):
+                continue
+            
+            # 如果看起来像代码（有缩进、关键字等）
+            code_lines.append(line)
+        
+        result = '\n'.join(code_lines).strip()
+        
+        # 如果结果太短，尝试另一种方法
+        if len(result) < 50:
+            # 直接查找第一个代码块
+            code_pattern = r"```(?:python)?\n(.*?)```"
+            match = re.search(code_pattern, text, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+        
+        return result
     
     def run_code_in_sandbox(self, code: str, test_input: str = None) -> Dict[str, Any]:
         """
